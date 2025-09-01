@@ -33,51 +33,89 @@ function cleanDatesInSheet_(sh) {
 
   targetCols.forEach(col => {
     const numRows = lastRow - HEADER_ROW;
-    const rng = sh.getRange(HEADER_ROW + 1, col, numRows, 1);
-    const vals = rng.getValues();
+    const rng     = sh.getRange(HEADER_ROW + 1, col, numRows, 1);
 
-    for (let i = 0; i < vals.length; i++) {
-      const v = vals[i][0];
-      const d = toDateOnly_(v);   // ← convierte texto/fecha a Date sin hora (00:00)
-      if (d) vals[i][0] = d;      // si no pudo convertir, deja el valor tal cual
+    // Leemos ambos: crudo (tipo real) y lo que se muestra en pantalla
+    const raw  = rng.getValues();
+    const disp = rng.getDisplayValues();
+
+    for (let i = 0; i < numRows; i++) {
+      const vRaw  = raw[i][0];
+      const vDisp = disp[i][0];
+
+      // 1) Si ya es Date, solo quitar la hora
+      if (vRaw instanceof Date && !isNaN(vRaw)) {
+        raw[i][0] = new Date(vRaw.getFullYear(), vRaw.getMonth(), vRaw.getDate());
+        continue;
+      }
+
+      // 2) Parsear lo visible (maneja 'p. m.' / 'a. m.' y variados)
+      const dFromDisp = toDateOnly_(vDisp);
+      if (dFromDisp) { raw[i][0] = dFromDisp; continue; }
+
+      // 3) Si es número serial de Sheets, normalizar
+      if (typeof vRaw === 'number' && isFinite(vRaw)) {
+        const ms = Math.floor(vRaw * 24 * 60 * 60 * 1000); // quita fracción (hora)
+        const d  = new Date(ms);
+        raw[i][0] = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        continue;
+      }
+
+      // Si no se pudo convertir, dejar como está
     }
 
-    rng.setValues(vals);
-    rng.setNumberFormat(DATE_FORMAT); // mostrar sin hora
+    rng.setValues(raw);
+    rng.setNumberFormat(DATE_FORMAT); // ejemplo: 'dd/MM/yyyy'
   });
 }
 
 /***** HELPERS *****/
-// Convierte a Date sin hora. Acepta Date, número serial o textos como "25 July 2023 09:00 a. m."
+// Convierte texto/fecha a Date sin hora (00:00). Tolera:
+//  - "27/08/25 12:00 p. m." / "27/08/2025 06:00 PM"
+//  - "27/08/2025", "27-08-2025", "27/08/25"
+//  - "2025-08-27 12:00", "2025/08/27"
 function toDateOnly_(v) {
-  if (v instanceof Date) {
+  if (v instanceof Date && !isNaN(v)) {
     return new Date(v.getFullYear(), v.getMonth(), v.getDate());
   }
-  if (typeof v === 'number') {
-    // número serial de Sheets: quitar fracción (hora)
-    return new Date(Math.floor(v * 24 * 60 * 60 * 1000));
-  }
-  if (typeof v === 'string') {
-    let s = v.trim();
-    if (!s) return null;
-    // normalizar "a. m." / "p. m." → AM/PM y quitar puntos
-    s = s.replace(/\ba\.?\s*m\.?\b/gi, 'AM')
-         .replace(/\bp\.?\s*m\.?\b/gi, 'PM')
-         .replace(/\s+/g, ' ')
-         .replace(/\.\b/g, '');
+  if (v == null) return null;
 
-    // Intento directo
-    let d = new Date(s);
-    if (!isNaN(d)) {
-      return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    }
+  let s = String(v).trim();
+  if (!s) return null;
 
-    // Intento extra: "25 July 2023" (sin hora)
-    const m = s.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
-    if (m) {
-      d = new Date(`${m[2]} ${m[1]}, ${m[3]}`);
-      if (!isNaN(d)) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    }
+  // Normaliza "a. m." / "p. m." y espacios no estándar
+  s = s
+    .replace(/\ba\.?\s*m\.?\b/gi, 'AM')   // a. m. → AM
+    .replace(/\bp\.?\s*m\.?\b/gi, 'PM')   // p. m. → PM
+    .replace(/\u00A0/g, ' ')              // NBSP → espacio normal
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Caso 1: dd/MM/(yy|yyyy) al inicio (con o sin hora)
+  let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2}|\d{4})/);
+  if (m) {
+    let d = parseInt(m[1], 10);
+    let M = parseInt(m[2], 10) - 1;
+    let y = parseInt(m[3], 10);
+    if (y < 100) y += 2000; // 27/08/25 → 2025
+    const out = new Date(y, M, d);
+    return isNaN(out) ? null : out;
   }
-  return null; // no convertible
+
+  // Caso 2: yyyy-MM-dd (o '/')
+  m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (m) {
+    const y = parseInt(m[1], 10);
+    const M = parseInt(m[2], 10) - 1;
+    const d = parseInt(m[3], 10);
+    const out = new Date(y, M, d);
+    return isNaN(out) ? null : out;
+  }
+
+  // Intento genérico (último recurso)
+  const dGeneric = new Date(s);
+  if (!isNaN(dGeneric)) {
+    return new Date(dGeneric.getFullYear(), dGeneric.getMonth(), dGeneric.getDate());
+  }
+  return null;
 }
