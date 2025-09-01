@@ -1,39 +1,40 @@
-/***** CONFIG *****/
-const TIMINGS_SPREADSHEET_ID = 'D3oZFOyBD2qWdBq108h0eYK8NtagGkiMUvFQl2O1E';
-const ACTIVIDAD_OBJETIVO   = 'SEGUIMIENTO DEL PROYECTO';
-const CABECERA_FILA        = 1;
 
-const COL_FECHA            = 1; // A
-const COL_OT               = 4; // D
-const COL_ACTIVIDAD        = 5; // E
-const COL_ACT_TIMING       = 6; // F
-const COL_CLIENTE          = 8; // H
+const ACTIVIDAD_OBJETIVO = 'SEGUIMIENTO DEL PROYECTO';
+const CABECERA_FILA = 1;
+
+const COL_FECHA = 1; // A
+const COL_OT = 4; // D
+const COL_ACTIVIDAD = 5; // E
+const COL_ACT_TIMING = 6; // F
+const COL_CLIENTE = 8; // H
+const COL_RESPONSABLE = 9; // I
 
 // === NUEVAS columnas usadas por Reporte Final (no afectan comportamiento previo) ===
-const COL_NOMBRE     = 2; // B
+const COL_NOMBRE = 2; // B
 const COL_TIEMPO_EST = 3; // C  (TIEMPO ESTIMADO (HORAS))
-const COL_DESC_ACT   = 7; // G  (DESCRIPCIÓN DE LA ACTIVIDAD)
+const COL_DESC_ACT = 7; // G  (DESCRIPCIÓN DE LA ACTIVIDAD)
 
 // Validaciones de fecha
-const REQUERIR_MES    = true;  // Debe estar en el mes actual
+const REQUERIR_MES = true;  // Debe estar en el mes actual
 
 // Hojas internas fijas (ocultas)
-const OTS_SHEET_NAME            = '__ots';                 // columnas: nombre_OT | Client
-const ACTIVIDADES_SHEET_NAME    = '__actividades_timing';  // columnas: una por OT; debajo, las actividades
-const FECHAS_SHEET_NAME         = '__fechas_timing';       // columnas: nombre_OT | Task_Name | Start_Date | Finish_Date
+const OTS_SHEET_NAME = '__ots';                 // columnas: nombre_OT | Client
+const ACTIVIDADES_SHEET_NAME = '__actividades_timing';  // columnas: una por OT; debajo, las actividades
+const FECHAS_SHEET_NAME = '__fechas_timing';       // columnas: nombre_OT | Task_Name | Start_Date | Finish_Date
 
 // Encabezados en TIMING
-const TIMING_HEADER_ROW     = 1;
-const TIMING_TASK_HEADER    = 'Task_Name';
-const TIMING_START_HEADER   = 'Start_Date';
-const TIMING_FINISH_HEADER  = 'Finish_Date';
-const TIMING_CLIENT_HEADER  = 'Client';
+const TIMING_HEADER_ROW = 1;
+const TIMING_TASK_HEADER = 'Task_Name';
+const TIMING_START_HEADER = 'Start_Date';
+const TIMING_FINISH_HEADER = 'Finish_Date';
+const TIMING_CLIENT_HEADER = 'Client';
+const TIMING_RESP_HEADER = 'Responsable';
 
 // Colores
-const COLOR_EN_CURSO   = '#51e425';
-const COLOR_VENCIDA    = '#ff7a5c';
-const COLOR_NO_INICIA  = '#77bbff';
-const COLOR_SIN_COLOR  = null;
+const COLOR_EN_CURSO = '#51e425';
+const COLOR_VENCIDA = '#ff7a5c';
+const COLOR_NO_INICIA = '#77bbff';
+const COLOR_SIN_COLOR = null;
 
 /***** CACHÉS POR EJECUCIÓN (mejoran velocidad sin cambiar comportamiento) *****/
 const _CACHE = {
@@ -43,6 +44,7 @@ const _CACHE = {
   otsRange: null,
   otsList: null,             // array con nombres de OT
   otToClient: null,          // Map nombre_OT -> cliente
+  otToResp: null,
   actividadesHeaderIndex: {},// Map OT -> {colIdx, lastRow}
   fechasList: null,          // array de filas de __fechas_timing
   fechasMap: null,           // Map `${ot}||${task}` -> {start, finish}
@@ -56,28 +58,28 @@ const NORM_ACTIVIDAD_OBJETIVO = normalize_(ACTIVIDAD_OBJETIVO);
 /***** CACHÉ PERSISTENTE (para onEdit ultrarrápido) *****/
 const _DOC_PROPS = PropertiesService.getDocumentProperties();
 const _CACHE_SVC = CacheService.getDocumentCache();
-const KEY_OT_LIST   = 'OT_LIST_JSON';
-const KEY_OT_TASKS  = 'OT_TASKS_JSON';
+const KEY_OT_LIST = 'OT_LIST_JSON';
+const KEY_OT_TASKS = 'OT_TASKS_JSON';
 
 function _persistCaches_(otList, otTasksMap) {
   try {
     const listTxt = JSON.stringify(otList || []);
-    const mapTxt  = JSON.stringify(otTasksMap || {});
+    const mapTxt = JSON.stringify(otTasksMap || {});
     _DOC_PROPS.setProperty(KEY_OT_LIST, listTxt);
     _DOC_PROPS.setProperty(KEY_OT_TASKS, mapTxt);
     _CACHE_SVC.put(KEY_OT_LIST, listTxt, 21600);  // 6h
     _CACHE_SVC.put(KEY_OT_TASKS, mapTxt, 21600);
-  } catch(_) {}
+  } catch (_) { }
 }
 function _readOTListFast_() {
   let txt = _CACHE_SVC.get(KEY_OT_LIST) || _DOC_PROPS.getProperty(KEY_OT_LIST);
   if (!txt) return [];
-  try { return JSON.parse(txt) || []; } catch(_) { return []; }
+  try { return JSON.parse(txt) || []; } catch (_) { return []; }
 }
 function _readOTTasksMapFastAll_() {
   let txt = _CACHE_SVC.get(KEY_OT_TASKS) || _DOC_PROPS.getProperty(KEY_OT_TASKS);
   if (!txt) return {};
-  try { return JSON.parse(txt) || {}; } catch(_) { return {}; }
+  try { return JSON.parse(txt) || {}; } catch (_) { return {}; }
 }
 function _readTasksForOTFast_(ot) {
   if (!ot) return [];
@@ -114,7 +116,7 @@ function onOpen() {
   ui.alert(
     'Formato del reporte',
     '⚠️ AVISO\n\n' +
-    'Si en "TIEMPO ESTIMADO (HORAS)" o "ACTIVIDAD GENERAL / TIMING" aparece un valor con advertencia roja (no coincide con su menú desplegable) o NO llenan la columna de NOMBRE, esa fila será EXCLUIDA y NO contará en el Reporte Final.\n\n' +
+    'Si en "TIEMPO ESTIMADO (HORAS)" o "ACTIVIDAD GENERAL" aparece un valor con advertencia roja (no coincide con su menú desplegable) o NO llenan la columna de NOMBRE, esa fila será EXCLUIDA y NO contará en el Reporte Final.\n\n' +
     'Cualquier duda, aclaración o error de formato, repórtalo con RRHH ANTES de que termine el mes en curso.',
     ui.ButtonSet.OK
   );
@@ -140,7 +142,7 @@ function refreshEverything_() {
 function onEdit(e) {
   if (!e || !e.range) return;
 
-  const sh  = e.range.getSheet();
+  const sh = e.range.getSheet();
   const row = e.range.getRow();
   const col = e.range.getColumn();
   if (row <= CABECERA_FILA) return;
@@ -158,7 +160,7 @@ function onEdit(e) {
   if (col === COL_FECHA) {
     const val = rowVals[COL_FECHA - 1];
     if (val instanceof Date) {
-      const hoy   = toMidnight_(new Date(), _CACHE.tz);
+      const hoy = toMidnight_(new Date(), _CACHE.tz);
       const fecha = toMidnight_(val, _CACHE.tz);
       let ok = true;
       if (REQUERIR_MES) ok = ok && (fecha.getFullYear() === hoy.getFullYear() && fecha.getMonth() === hoy.getMonth());
@@ -175,12 +177,12 @@ function onEdit(e) {
   /***** REACCIONES DE CAMPOS *****/
   if (col === COL_ACTIVIDAD) {
     // Limpia OT + ACT_TIMING + CLIENTE en bloque
-    sh.getRangeList([colToA1_(COL_OT, row), colToA1_(COL_ACT_TIMING, row), colToA1_(COL_CLIENTE, row)]).clearContent();
+    sh.getRangeList([colToA1_(COL_OT, row), colToA1_(COL_ACT_TIMING, row), colToA1_(COL_CLIENTE, row), colToA1_(COL_RESPONSABLE, row)]).clearContent();
     unlockClientCell_(sh, row);
   }
 
   if (col === COL_OT) {
-    sh.getRangeList([colToA1_(COL_ACT_TIMING, row), colToA1_(COL_CLIENTE, row)]).clearContent();
+    sh.getRangeList([colToA1_(COL_ACT_TIMING, row), colToA1_(COL_CLIENTE, row), colToA1_(COL_RESPONSABLE, row)]).clearContent();
     unlockClientCell_(sh, row);
   }
 
@@ -198,24 +200,30 @@ function onEdit(e) {
   const actividadGeneral = String(rowVals[COL_ACTIVIDAD - 1] || '').trim();
   const esSeg = normalize_(actividadGeneral) === NORM_ACTIVIDAD_OBJETIVO;
   const otEdit = (typeof e.value !== 'undefined' && col === COL_OT) ? e.value : rowVals[COL_OT - 1];
-  const ot     = String(otEdit || '').trim();
+  const ot = String(otEdit || '').trim();
 
   if (esSeg && ot) {
     const cliente = getClientFromLocalOTs_(ot);
+    const resp = getResponsableFromLocalOTs_(ot);   
     const cCli = sh.getRange(row, COL_CLIENTE);
+    const cRes = sh.getRange(row, COL_RESPONSABLE);  
     if (cliente) setIfChanged_(cCli, cliente); else cCli.clearContent();
+    if (resp) setIfChanged_(cRes, resp); else cRes.clearContent();  
     lockClientCell_(sh, row);
+    lockResponsableCell_(sh, row);                 
   } else {
     unlockClientCell_(sh, row);
+    unlockResponsableCell_(sh, row);              
   }
+
 }
 
 
 /***** VALIDACIÓN POR FILA (OT/Actividad Timing) *****/
 function applyRowValidations_(sh, row, eOpt) {
   const cAct = sh.getRange(row, COL_ACTIVIDAD);
-  const cOT  = sh.getRange(row, COL_OT);
-  const cAT  = sh.getRange(row, COL_ACT_TIMING);
+  const cOT = sh.getRange(row, COL_OT);
+  const cAT = sh.getRange(row, COL_ACT_TIMING);
 
   const esSeg = normalize_(cAct.getValue()) === NORM_ACTIVIDAD_OBJETIVO;
   if (!esSeg) {
@@ -234,7 +242,7 @@ function applyRowValidations_(sh, row, eOpt) {
     if (!cur || String(cur) !== String(dvOT)) cOT.setDataValidation(dvOT);
   } else {
     const otRange = getLocalOTRange_();
-    const ruleOT  = SpreadsheetApp.newDataValidation().requireValueInRange(otRange, true).setAllowInvalid(false).build();
+    const ruleOT = SpreadsheetApp.newDataValidation().requireValueInRange(otRange, true).setAllowInvalid(false).build();
     const cur = cOT.getDataValidation();
     if (!cur || String(cur) !== String(ruleOT)) cOT.setDataValidation(ruleOT);
   }
@@ -273,7 +281,7 @@ function applyRowValidations_(sh, row, eOpt) {
 function applyTimingColorForRow_(sh, row) {
   const vals = sh.getRange(row, 1, 1, Math.max(COL_ACT_TIMING, COL_OT, COL_ACTIVIDAD)).getValues()[0];
   const actividadGeneral = String(vals[COL_ACTIVIDAD - 1] || '').trim();
-  const cell  = sh.getRange(row, COL_ACT_TIMING);
+  const cell = sh.getRange(row, COL_ACT_TIMING);
 
   if (normalize_(actividadGeneral) !== NORM_ACTIVIDAD_OBJETIVO) {
     setBgIfChanged_(cell, COLOR_SIN_COLOR);
@@ -281,7 +289,7 @@ function applyTimingColorForRow_(sh, row) {
     return;
   }
 
-  const ot    = String(vals[COL_OT - 1] || '').trim();
+  const ot = String(vals[COL_OT - 1] || '').trim();
   const tarea = String(vals[COL_ACT_TIMING - 1] || '').trim();
   if (!ot || !tarea) {
     setBgIfChanged_(cell, COLOR_SIN_COLOR);
@@ -297,19 +305,19 @@ function applyTimingColorForRow_(sh, row) {
   const fechas = getDatesFromLocal_(ot, tarea); // usa caché interna
   if (!fechas) {
     setBgIfChanged_(cell, COLOR_SIN_COLOR);
-    setNoteIfChanged_(cell, 'No hay fechas en __fechas_timing para "'+tarea+'" (OT: "'+ot+'"). Usa “Actualizar fechas”.');
+    setNoteIfChanged_(cell, 'No hay fechas en __fechas_timing para "' + tarea + '" (OT: "' + ot + '"). Usa “Actualizar fechas”.');
     return;
   }
 
   if (!_CACHE.tz) _CACHE.tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
-  const hoy    = stripTime_(new Date(), _CACHE.tz);
-  const start  = stripTime_(fechas.start, _CACHE.tz);
+  const hoy = stripTime_(new Date(), _CACHE.tz);
+  const start = stripTime_(fechas.start, _CACHE.tz);
   const finish = stripTime_(fechas.finish, _CACHE.tz);
 
   let color = COLOR_SIN_COLOR;
   if (hoy >= start && hoy <= finish) color = COLOR_EN_CURSO;
-  else if (hoy > finish)             color = COLOR_VENCIDA;
-  else if (hoy < start)              color = COLOR_NO_INICIA;
+  else if (hoy > finish) color = COLOR_VENCIDA;
+  else if (hoy < start) color = COLOR_NO_INICIA;
 
   const noteTxt = 'Inicio: ' + formatDMY_(start, _CACHE.tz) + '\nFin: ' + formatDMY_(finish, _CACHE.tz);
   setBgIfChanged_(cell, color);
@@ -320,7 +328,8 @@ function applyTimingColorForRow_(sh, row) {
 function refreshOTs_() {
   const sh = ensureOTsSheet_();
   sh.clear();
-  sh.getRange(1,1,1,2).setValues([['nombre_OT','Client']]);
+  // nombre_OT | Client | Responsable
+  sh.getRange(1, 1, 1, 3).setValues([['nombre_OT', 'Client', 'Responsable']]);
 
   const timing = _getTimingsSS_();
   const sheets = timing.getSheets();
@@ -330,23 +339,26 @@ function refreshOTs_() {
     const s = sheets[i];
     const otName = s.getName();
     const client = getFirstClientFromTimingSheet_(s);
-    rows.push([otName, client]);
+    const resp = getFirstResponsableFromTimingSheet_(s); // <— NUEVO
+    rows.push([otName, client, resp]);
   }
-  if (rows.length) sh.getRange(2,1,rows.length,2).setValues(rows);
+  if (rows.length) sh.getRange(2, 1, rows.length, 3).setValues(rows);
   if (!sh.isSheetHidden()) sh.hideSheet();
 
-  // invalidar cachés en memoria
+  // invalidar cachés
   _CACHE.otsRange = null;
   _CACHE.otsList = null;
   _CACHE.otToClient = null;
+  _CACHE.otToResp = null; // <— NUEVO
 
-  // --- Actualiza cache persistente de OTs (mantén tareas previas si existen)
+  // Actualiza caches persistentes (lista de OTs se mantiene)
   const otList = rows.map(r => String(r[0]).trim()).filter(Boolean);
-  const existingTasksMap = _readOTTasksMapFastAll_(); // conserva lo que ya tenías
+  const existingTasksMap = _readOTTasksMapFastAll_();
   _persistCaches_(otList, existingTasksMap);
 
   SpreadsheetApp.getActive().toast(`OTs actualizadas: ${rows.length}`, 'OK', 3);
 }
+
 
 function refreshActividades_() {
   const sh = ensureActividadesSheet_();
@@ -377,7 +389,7 @@ function refreshActividades_() {
   if (dataCols.length) {
     for (let i = 0; i < dataCols.length; i++) while (dataCols[i].length < maxLen + 1) dataCols[i].push('');
     const rows = transpose_(dataCols);
-    sh.getRange(1,1,rows.length,rows[0].length).setValues(rows);
+    sh.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
   }
   if (!sh.isSheetHidden()) sh.hideSheet();
 
@@ -393,7 +405,7 @@ function refreshActividades_() {
 function refreshFechas_() {
   const sh = ensureFechasSheet_();
   sh.clear();
-  sh.getRange(1,1,1,4).setValues([['nombre_OT','Task_Name','Start_Date','Finish_Date']]);
+  sh.getRange(1, 1, 1, 4).setValues([['nombre_OT', 'Task_Name', 'Start_Date', 'Finish_Date']]);
 
   const ots = getAllOTsFromLocal_();
   if (!ots.length) {
@@ -413,27 +425,27 @@ function refreshFechas_() {
     if (lastRow < TIMING_HEADER_ROW + 1) continue;
 
     const headers = s.getRange(TIMING_HEADER_ROW, 1, 1, lastCol).getValues()[0].map(v => String(v).trim());
-    const iTask   = headers.indexOf(TIMING_TASK_HEADER)   + 1;
-    const iStart  = headers.indexOf(TIMING_START_HEADER)  + 1;
+    const iTask = headers.indexOf(TIMING_TASK_HEADER) + 1;
+    const iStart = headers.indexOf(TIMING_START_HEADER) + 1;
     const iFinish = headers.indexOf(TIMING_FINISH_HEADER) + 1;
     if (iTask <= 0 || iStart <= 0 || iFinish <= 0) continue;
 
     // Lee solo las 3 columnas necesarias (reduce IO)
     const n = lastRow - TIMING_HEADER_ROW;
-    const tasks  = s.getRange(TIMING_HEADER_ROW + 1, iTask,   n, 1).getValues();
-    const starts = s.getRange(TIMING_HEADER_ROW + 1, iStart,  n, 1).getValues();
-    const ends   = s.getRange(TIMING_HEADER_ROW + 1, iFinish, n, 1).getValues();
+    const tasks = s.getRange(TIMING_HEADER_ROW + 1, iTask, n, 1).getValues();
+    const starts = s.getRange(TIMING_HEADER_ROW + 1, iStart, n, 1).getValues();
+    const ends = s.getRange(TIMING_HEADER_ROW + 1, iFinish, n, 1).getValues();
 
     for (let r = 0; r < n; r++) {
-      const task   = String(tasks[r][0]).trim();
+      const task = String(tasks[r][0]).trim();
       if (!task) continue;
-      const start  = toDateSafe_(starts[r][0]);
+      const start = toDateSafe_(starts[r][0]);
       const finish = toDateSafe_(ends[r][0]);
       rows.push([ot, task, start || '', finish || '']);
     }
   }
 
-  if (rows.length) sh.getRange(2,1,rows.length,4).setValues(rows);
+  if (rows.length) sh.getRange(2, 1, rows.length, 4).setValues(rows);
   if (!sh.isSheetHidden()) sh.hideSheet();
 
   // invalidar y precargar caché de fechas
@@ -448,7 +460,7 @@ function getLocalOTRange_() {
   if (_CACHE.otsRange) return _CACHE.otsRange;
   const sh = ensureOTsSheet_();
   const last = Math.max(sh.getLastRow(), 1);
-  _CACHE.otsRange = (last < 2) ? sh.getRange(2,1,1,1) : sh.getRange(2,1,last-1,1);
+  _CACHE.otsRange = (last < 2) ? sh.getRange(2, 1, 1, 1) : sh.getRange(2, 1, last - 1, 1);
   return _CACHE.otsRange;
 }
 
@@ -463,7 +475,7 @@ function getTasksRangeFromLocal_(otName) {
 
   const lastRow = getColumnLastRow_(sh, colIdx, 2);
   if (lastRow < 2) return null;
-  return sh.getRange(2, colIdx, lastRow-1, 1);
+  return sh.getRange(2, colIdx, lastRow - 1, 1);
 }
 
 function _buildFechasMapIfNeeded_() {
@@ -478,13 +490,13 @@ function _buildFechasMapIfNeeded_() {
       _CACHE.fechasMap = new Map();
       return;
     }
-    vals = sh.getRange(2,1,lastRow-1,4).getValues(); // nombre_OT | Task_Name | Start | Finish
+    vals = sh.getRange(2, 1, lastRow - 1, 4).getValues(); // nombre_OT | Task_Name | Start | Finish
   }
   const map = new Map();
   for (let i = 0; i < vals.length; i++) {
     const [ot, task, s, f] = vals[i];
     if (!ot || !task) continue;
-    const start  = toDateSafe_(s);
+    const start = toDateSafe_(s);
     const finish = toDateSafe_(f);
     if (!start || !finish) continue;
     map.set(`${String(ot).trim()}||${String(task).trim()}`, { start, finish });
@@ -506,7 +518,7 @@ function getAllOTsFromLocal_() {
     _CACHE.otsList = [];
     return [];
   }
-  const list = sh.getRange(2,1,last-1,1).getValues().flat().map(v => String(v).trim()).filter(Boolean);
+  const list = sh.getRange(2, 1, last - 1, 1).getValues().flat().map(v => String(v).trim()).filter(Boolean);
   _CACHE.otsList = list;
   return list.slice();
 }
@@ -520,8 +532,8 @@ function getClientFromLocalOTs_(otName) {
   const lastRow = sh.getLastRow();
   const map = new Map();
   if (lastRow >= 2) {
-    const vals = sh.getRange(2,1,lastRow-1,2).getValues(); // nombre_OT | Client
-    for (let i=0;i<vals.length;i++){
+    const vals = sh.getRange(2, 1, lastRow - 1, 2).getValues(); // nombre_OT | Client
+    for (let i = 0; i < vals.length; i++) {
       const k = String(vals[i][0]).trim();
       const v = String(vals[i][1] || '').trim();
       if (k) map.set(k, v);
@@ -530,6 +542,27 @@ function getClientFromLocalOTs_(otName) {
   _CACHE.otToClient = map;
   return map.get(otName) || '';
 }
+
+function getResponsableFromLocalOTs_(otName) {
+  if (_CACHE.otToResp) {
+    return _CACHE.otToResp.get(otName) || '';
+  }
+  const sh = ensureOTsSheet_();
+  const lastRow = sh.getLastRow();
+  const map = new Map();
+  if (lastRow >= 2) {
+    // nombre_OT | Client | Responsable
+    const vals = sh.getRange(2, 1, lastRow - 1, 3).getValues();
+    for (let i = 0; i < vals.length; i++) {
+      const k = String(vals[i][0]).trim();
+      const v = String(vals[i][2] || '').trim(); // col 3 = Responsable
+      if (k) map.set(k, v);
+    }
+  }
+  _CACHE.otToResp = map;
+  return map.get(otName) || '';
+}
+
 
 /***** BLOQUEO / DESBLOQUEO DE CLIENTE (con protecciones cacheadas) *****/
 function lockClientCell_(sh, row) {
@@ -555,7 +588,7 @@ function removeClientProtectionIfExists_(sh, row) {
     _CACHE._protBySheetId.set(sheetId, list);
   }
   const rangeA1 = sh.getRange(row, COL_CLIENTE).getA1Notation();
-  const desc    = makeClientLockDesc_(sh, row);
+  const desc = makeClientLockDesc_(sh, row);
   const kept = [];
   for (const p of list) {
     try {
@@ -565,10 +598,50 @@ function removeClientProtectionIfExists_(sh, row) {
       } else {
         kept.push(p);
       }
-    } catch(_) {}
+    } catch (_) { }
   }
   _CACHE._protBySheetId.set(sheetId, kept);
 }
+
+function lockResponsableCell_(sh, row) {
+  removeResponsableProtectionIfExists_(sh, row);
+  const prot = sh.getRange(row, COL_RESPONSABLE).protect();
+  prot.setDescription(makeRespLockDesc_(sh, row));
+  prot.setWarningOnly(false);
+  const editors = prot.getEditors();
+  if (editors && editors.length) prot.removeEditors(editors);
+  if (prot.canDomainEdit()) prot.setDomainEdit(false);
+  _pushProtCache_(sh, prot); // reutiliza el mismo cache de protecciones
+}
+function unlockResponsableCell_(sh, row) {
+  removeResponsableProtectionIfExists_(sh, row);
+}
+function removeResponsableProtectionIfExists_(sh, row) {
+  const sheetId = sh.getSheetId();
+  let list = _CACHE._protBySheetId.get(sheetId);
+  if (!list) {
+    list = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE) || [];
+    _CACHE._protBySheetId.set(sheetId, list);
+  }
+  const rangeA1 = sh.getRange(row, COL_RESPONSABLE).getA1Notation();
+  const desc = makeRespLockDesc_(sh, row);
+  const kept = [];
+  for (const p of list) {
+    try {
+      const r = p.getRange();
+      if (r && (r.getA1Notation() === rangeA1 || p.getDescription() === desc)) {
+        p.remove();
+      } else {
+        kept.push(p);
+      }
+    } catch (_) { }
+  }
+  _CACHE._protBySheetId.set(sheetId, kept);
+}
+function makeRespLockDesc_(sh, row) {
+  return `__lock_responsable_${sh.getSheetId()}_${row}`;
+}
+
 
 function _pushProtCache_(sh, prot) {
   const sheetId = sh.getSheetId();
@@ -617,12 +690,27 @@ function getFirstClientFromTimingSheet_(sheet) {
   const iClient = headers.indexOf(TIMING_CLIENT_HEADER) + 1;
   if (iClient <= 0) return '';
   const colVals = sheet.getRange(TIMING_HEADER_ROW + 1, iClient, lastRow - TIMING_HEADER_ROW, 1).getValues();
-  for (let i=0;i<colVals.length;i++){
+  for (let i = 0; i < colVals.length; i++) {
     const v = String(colVals[i][0]).trim();
     if (v) return v;
   }
   return '';
 }
+function getFirstResponsableFromTimingSheet_(sheet) {
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < TIMING_HEADER_ROW + 1) return '';
+  const headers = sheet.getRange(TIMING_HEADER_ROW, 1, 1, lastCol).getValues()[0].map(v => String(v).trim());
+  const iResp = headers.indexOf(TIMING_RESP_HEADER) + 1;
+  if (iResp <= 0) return '';
+  const colVals = sheet.getRange(TIMING_HEADER_ROW + 1, iResp, lastRow - TIMING_HEADER_ROW, 1).getValues();
+  for (let i = 0; i < colVals.length; i++) {
+    const v = String(colVals[i][0]).trim();
+    if (v) return v;
+  }
+  return '';
+}
+
 
 /***** HELPERS GENERALES *****/
 function setSelectedTask(task, row, sheetName) {
@@ -651,9 +739,9 @@ function toDateSafe_(v) {
   const s = String(v).trim();
   if (!s) return null;
   const m1 = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/); // d/m/Y
-  if (m1) return new Date(parseInt(m1[3],10), parseInt(m1[2],10)-1, parseInt(m1[1],10));
+  if (m1) return new Date(parseInt(m1[3], 10), parseInt(m1[2], 10) - 1, parseInt(m1[1], 10));
   const m2 = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/); // Y-m-d
-  if (m2) return new Date(parseInt(m2[1],10), parseInt(m2[2],10)-1, parseInt(m2[3],10));
+  if (m2) return new Date(parseInt(m2[1], 10), parseInt(m2[2], 10) - 1, parseInt(m2[3], 10));
   return null;
 }
 function stripTime_(d, tz) { return new Date(Utilities.formatDate(d, tz, 'yyyy/MM/dd')); }
@@ -668,10 +756,10 @@ function normalize_(s) {
 function transpose_(arrOfCols) {
   const rows = Math.max(...arrOfCols.map(c => c.length));
   const cols = arrOfCols.length;
-  const out = Array.from({length: rows}, () => Array(cols).fill(''));
-  for (let c=0;c<cols;c++){
+  const out = Array.from({ length: rows }, () => Array(cols).fill(''));
+  for (let c = 0; c < cols; c++) {
     const colArr = arrOfCols[c];
-    for (let r=0;r<colArr.length;r++){
+    for (let r = 0; r < colArr.length; r++) {
       out[r][c] = colArr[r];
     }
   }
@@ -738,12 +826,13 @@ function _getTimingsSS_() {
 }
 
 /***** === NUEVO: Generar Reporte Final === *****/
+/***** === NUEVO: Generar Reporte Final (con Responsable) === *****/
 function generateFinalReport_() {
   const ss = _getActiveSS_();
   const src = ss.getActiveSheet();
   const srcName = src.getName();
 
-  // Copia de la pestaña
+  // Copia de la pestaña activa
   const copy = src.copyTo(ss);
   const newName = `REPORTE FINAL-${srcName}`;
   try { copy.setName(newName); }
@@ -762,7 +851,7 @@ function generateFinalReport_() {
     return;
   }
 
-  // === Helpers ===
+  // === Helpers locales ===
   function getFirstDVRuleInColumn_(sheet, col, startRow) {
     const maxR = sheet.getMaxRows();
     const rng = sheet.getRange(startRow, col, Math.max(1, maxR - startRow + 1), 1);
@@ -790,22 +879,23 @@ function generateFinalReport_() {
     return null;
   }
   function toNormSet_(arr) { return new Set((arr || []).map(x => normalize_(x))); }
+  function toTxt_(x) { return (x === '' ? '' : "'" + String(x)); }
 
   const dataStart = CABECERA_FILA + 1;
 
-  // === 1) Listas permitidas
+  // === 1) Listas permitidas detectadas desde validaciones
   const allowedTiempoList =
     inferAllowedList_(src, COL_TIEMPO_EST, dataStart) ||
     inferAllowedList_(sh,  COL_TIEMPO_EST, dataStart);
 
-  // Fallback para ACTIVIDAD GENERAL (por si no detectamos DV en la columna)
+  // Fallback de ACTIVIDAD GENERAL por si no detectamos DV
   const FALLBACK_ACT_LIST = [
     'SEGUIMIENTO DEL PROYECTO',
     'COMIDA',
     'VACACIONES',
     'RRHH',
-    'CAPACITACIÓN',   // con acento
-    'CAPACITACION',   // sin acento (por si tu lista está así)
+    'CAPACITACIÓN',
+    'CAPACITACION',
     'JUNTA CLIENTE',
     'JUNTA CON CLIENTE',
     'JUNTA INTERNA',
@@ -814,12 +904,12 @@ function generateFinalReport_() {
   const allowedActList =
     inferAllowedList_(src, COL_ACTIVIDAD, dataStart) ||
     inferAllowedList_(sh,  COL_ACTIVIDAD, dataStart) ||
-    FALLBACK_ACT_LIST.slice(); // <- aquí garantizamos lista
+    FALLBACK_ACT_LIST.slice();
 
   const allowedActSetNorm = toNormSet_(allowedActList);
-  const tiempoRegex = /^([0-1]?\d|2[0-3]):[0-5]\d$/; // fallback estricto hh:mm
+  const tiempoRegex = /^([0-1]?\d|2[0-3]):[0-5]\d$/; // hh:mm
 
-  // === 2) Eliminar filas que NO cumplan
+  // === 2) Eliminar filas que NO cumplan: (Nombre vacío) o (Tiempo/Actividad fuera de lista)
   const rowsToDelete = [];
   for (let r = dataStart; r <= lastRow; r++) {
     const vNombre = String(sh.getRange(r, COL_NOMBRE).getDisplayValue() || '').trim();
@@ -835,7 +925,6 @@ function generateFinalReport_() {
       okTiempo = (vTiempo === '') ? true : tiempoRegex.test(vTiempo);
     }
 
-    // ACTIVIDAD GENERAL: comparación por texto normalizado (con fallback de lista)
     const actNorm = normalize_(vAct);
     const okActividad = (vAct === '') ? true : allowedActSetNorm.has(actNorm);
 
@@ -852,11 +941,11 @@ function generateFinalReport_() {
   // === 3) Quitar TODAS las validaciones
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setDataValidation(null);
 
-  // === 4) Normalizar a texto
-  const rngData = sh.getRange(dataStart, 1, lastRow2 - CABECERA_FILA, Math.max(lastCol, COL_CLIENTE));
+  // === 4) Normalizar a texto (usar displayValues para congelar formatos)
+  const rngData = sh.getRange(dataStart, 1, lastRow2 - CABECERA_FILA, Math.max(lastCol, COL_CLIENTE, COL_RESPONSABLE));
   let vals = rngData.getDisplayValues().map(row => row.map(v => (v == null ? '' : String(v))));
 
-  // === 5) Reglas por actividad + fecha (igual que ya tenías, con limpieza de descripción en COMIDA/VACACIONES)
+  // === 5) Reglas por actividad + fecha
   for (let i = 0; i < vals.length; i++) {
     const r = i + dataStart;
 
@@ -868,73 +957,82 @@ function generateFinalReport_() {
     let vActTiming = vals[i][COL_ACT_TIMING-1];
     let vDesc      = vals[i][COL_DESC_ACT-1];
     let vCliente   = vals[i][COL_CLIENTE-1];
+    let vResp      = vals[i][COL_RESPONSABLE-1]; // <<< RESPONSABLE
 
     const act = (vActGral || '').toString().trim().toUpperCase();
     const isCOMIDA = act === 'COMIDA';
     const isVAC    = act === 'VACACIONES';
 
+    // Colorear fecha si es día hábil
     let fechaObj = toDateSafe_(vFecha);
     if (!vFecha || !String(vFecha).trim()) {
       vFecha = 'EL USUARIO NO LLENO LOS DATOS';
     } else if (fechaObj instanceof Date) {
-      const day = fechaObj.getDay();
+      const day = fechaObj.getDay(); // 0=Dom,6=Sáb
       if (day === 0 || day === 6) sh.getRange(r, COL_FECHA).setBackground(COLOR_NO_INICIA);
       else sh.getRange(r, COL_FECHA).setBackground(null);
     }
 
     if (isCOMIDA) {
       vTiempo = '1:00';
-      vOT = ''; vActTiming = ''; vDesc = ''; vCliente = '';
+      vOT = ''; vActTiming = ''; vDesc = ''; vCliente = ''; vResp = '';
     } else if (isVAC) {
       vTiempo = '10:00';
-      vOT = ''; vActTiming = ''; vDesc = ''; vCliente = '';
+      vOT = ''; vActTiming = ''; vDesc = ''; vCliente = ''; vResp = '';
     } else if (act === 'RRHH' || act === 'CAPACITACIÓN' || act === 'CAPACITACION') {
-      vOT = ''; vActTiming = ''; vCliente = '';
+      vOT = ''; vActTiming = ''; vCliente = ''; /* vResp: mantener si lo capturaron */
     } else if (act === 'JUNTA CLIENTE' || act === 'JUNTA CON CLIENTE') {
       vActTiming = '';
-      if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
+      if (!vFecha || !String(vFecha).trim())  vFecha  = 'USUARIO NO LLENO LOS DATOS';
       if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
-      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim())    vDesc   = 'USUARIO NO LLENO LOS DATOS';
       if (!vCliente || !String(vCliente).trim()) vCliente = 'USUARIO NO LLENO LOS DATOS';
-      if (!vOT || !String(vOT).trim()) vOT = 'EL USUARIO NO LLENO LOS DATOS O EL CLIENTE NO TIENE OT';
+      if (!vOT || !String(vOT).trim())        vOT     = 'EL USUARIO NO LLENO LOS DATOS O EL CLIENTE NO TIENE OT';
+      // Responsable no es obligatorio aquí (sin cambio)
     } else if (act === 'JUNTA INTERNA') {
       vActTiming = '';
-      if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
+      if (!vFecha || !String(vFecha).trim())  vFecha  = 'USUARIO NO LLENO LOS DATOS';
       if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
-      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim())    vDesc   = 'USUARIO NO LLENO LOS DATOS';
       if (!vCliente || !String(vCliente).trim()) vCliente = 'USUARIO NO LLENO LOS DATOS O NO ES JUNTA SOBRE UN CLIENTE/OT)';
+      // Responsable no es obligatorio aquí (sin cambio)
     } else if (act === 'OT INTERNA') {
       vActTiming = ''; vCliente = '';
-      if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
+      if (!vFecha || !String(vFecha).trim())  vFecha  = 'USUARIO NO LLENO LOS DATOS';
       if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
-      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
-      if (!vOT || !String(vOT).trim()) vOT = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim())    vDesc   = 'USUARIO NO LLENO LOS DATOS';
+      if (!vOT || !String(vOT).trim())        vOT     = 'USUARIO NO LLENO LOS DATOS';
+      if (!vResp || !String(vResp).trim())    vResp   = 'USUARIO NO LLENO LOS DATOS'; // <<< REGLA PEDIDA
     } else if (normalize_(act) === NORM_ACTIVIDAD_OBJETIVO) {
-      if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
-      if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
-      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
-      if (!vOT || !String(vOT).trim()) vOT = 'USUARIO NO LLENO LOS DATOS';
+      // Seguimiento del proyecto (mantiene todas las validaciones ya existentes)
+      if (!vFecha || !String(vFecha).trim())     vFecha     = 'USUARIO NO LLENO LOS DATOS';
+      if (!vTiempo || !String(vTiempo).trim())   vTiempo    = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim())       vDesc      = 'USUARIO NO LLENO LOS DATOS';
+      if (!vOT || !String(vOT).trim())           vOT        = 'USUARIO NO LLENO LOS DATOS';
       if (!vActTiming || !String(vActTiming).trim()) vActTiming = 'USUARIO NO LLENO LOS DATOS';
-      if (!vCliente || !String(vCliente).trim()) vCliente = 'USUARIO NO LLENO LOS DATOS';
+      if (!vCliente || !String(vCliente).trim()) vCliente   = 'USUARIO NO LLENO LOS DATOS';
+      // Responsable no es obligatorio aquí; si quieres forzarlo, agrega validación similar.
     }
 
-    if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
+    // Validaciones generales
+    if (!vFecha || !String(vFecha).trim())   vFecha  = 'USUARIO NO LLENO LOS DATOS';
     if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
     if (!(isCOMIDA || isVAC)) {
-      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim())   vDesc   = 'USUARIO NO LLENO LOS DATOS';
     } else {
       vDesc = '';
     }
 
-    const toTxt = x => (x === '' ? '' : "'" + String(x));
-    vals[i][COL_FECHA-1]      = toTxt(vFecha);
-    vals[i][COL_NOMBRE-1]     = toTxt(vNombre);
-    vals[i][COL_TIEMPO_EST-1] = toTxt(vTiempo);
-    vals[i][COL_OT-1]         = toTxt(vOT);
-    vals[i][COL_ACTIVIDAD-1]  = toTxt(vActGral);
-    vals[i][COL_ACT_TIMING-1] = toTxt(vActTiming);
-    vals[i][COL_DESC_ACT-1]   = toTxt(vDesc);
-    vals[i][COL_CLIENTE-1]    = toTxt(vCliente);
+    // Reasignación a texto (con apóstrofe)
+    vals[i][COL_FECHA-1]      = toTxt_(vFecha);
+    vals[i][COL_NOMBRE-1]     = toTxt_(vNombre);
+    vals[i][COL_TIEMPO_EST-1] = toTxt_(vTiempo);
+    vals[i][COL_OT-1]         = toTxt_(vOT);
+    vals[i][COL_ACTIVIDAD-1]  = toTxt_(vActGral);
+    vals[i][COL_ACT_TIMING-1] = toTxt_(vActTiming);
+    vals[i][COL_DESC_ACT-1]   = toTxt_(vDesc);
+    vals[i][COL_CLIENTE-1]    = toTxt_(vCliente);
+    vals[i][COL_RESPONSABLE-1]= toTxt_(vResp); // <<< RESPONSABLE
   }
 
   // === 6) Escribir resultados
