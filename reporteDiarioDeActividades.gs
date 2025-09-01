@@ -3,22 +3,20 @@ const ACTIVIDAD_OBJETIVO = 'SEGUIMIENTO DEL PROYECTO';
 const CABECERA_FILA = 1;
 
 const COL_FECHA = 1; // A
+const COL_NOMBRE = 2; // B
+const COL_TIEMPO_EST = 3; // C  (TIEMPO ESTIMADO (HORAS))
 const COL_OT = 4; // D
 const COL_ACTIVIDAD = 5; // E
 const COL_ACT_TIMING = 6; // F
-const COL_CLIENTE = 8; // H
-const COL_RESPONSABLE = 9; // I
-
-// === NUEVAS columnas usadas por Reporte Final (no afectan comportamiento previo) ===
-const COL_NOMBRE = 2; // B
-const COL_TIEMPO_EST = 3; // C  (TIEMPO ESTIMADO (HORAS))
 const COL_DESC_ACT = 7; // G  (DESCRIPCIÓN DE LA ACTIVIDAD)
+const COL_CLIENTE = 8; // H
+const COL_RESPONSABLE = 9; // I  (RESPONSABLE (si hay))
 
 // Validaciones de fecha
 const REQUERIR_MES = true;  // Debe estar en el mes actual
 
 // Hojas internas fijas (ocultas)
-const OTS_SHEET_NAME = '__ots';                 // columnas: nombre_OT | Client
+const OTS_SHEET_NAME = '__ots';                 // columnas: nombre_OT | Client | (Responsable opcional en col 3)
 const ACTIVIDADES_SHEET_NAME = '__actividades_timing';  // columnas: una por OT; debajo, las actividades
 const FECHAS_SHEET_NAME = '__fechas_timing';       // columnas: nombre_OT | Task_Name | Start_Date | Finish_Date
 
@@ -112,21 +110,21 @@ function getDVForTasks_(ot, tasks) {
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
 
-  // === Modal al abrir (bloqueante) ===
+  // Modal al abrir
   ui.alert(
     'Formato del reporte',
     '⚠️ AVISO\n\n' +
-    'Si en "TIEMPO ESTIMADO (HORAS)" o "ACTIVIDAD GENERAL" aparece un valor con advertencia roja (no coincide con su menú desplegable) o NO llenan la columna de NOMBRE, esa fila será EXCLUIDA y NO contará en el Reporte Final.\n\n' +
+    'Si en "TIEMPO ESTIMADO (HORAS)" o "ACTIVIDAD GENERAL / TIMING" aparece un valor con advertencia roja (no coincide con su menú desplegable) o NO llenan la columna de NOMBRE, esa fila será EXCLUIDA y NO contará en el Reporte Final.\n\n' +
     'Cualquier duda, aclaración o error de formato, repórtalo con RRHH ANTES de que termine el mes en curso.',
     ui.ButtonSet.OK
   );
 
-  // === Menú 1: Actualizar Timings (renombrado) ===
+  // Menú 1: Actualizar Timings
   ui.createMenu('Actualizar Timings')
     .addItem('Actualizar todos los timings', 'refreshEverything_')
     .addToUi();
 
-  // === Menú 2: Reporte (nuevo) ===
+  // Menú 2: Reporte
   ui.createMenu('Reporte')
     .addItem('Generar Reporte Final', 'generateFinalReport_')
     .addToUi();
@@ -176,14 +174,24 @@ function onEdit(e) {
 
   /***** REACCIONES DE CAMPOS *****/
   if (col === COL_ACTIVIDAD) {
-    // Limpia OT + ACT_TIMING + CLIENTE en bloque
-    sh.getRangeList([colToA1_(COL_OT, row), colToA1_(COL_ACT_TIMING, row), colToA1_(COL_CLIENTE, row), colToA1_(COL_RESPONSABLE, row)]).clearContent();
+    sh.getRangeList([
+      colToA1_(COL_OT, row),
+      colToA1_(COL_ACT_TIMING, row),
+      colToA1_(COL_CLIENTE, row),
+      colToA1_(COL_RESPONSABLE, row)  // <— NUEVO
+    ]).clearContent();
     unlockClientCell_(sh, row);
+    unlockResponsableCell_(sh, row);   // <— NUEVO
   }
 
   if (col === COL_OT) {
-    sh.getRangeList([colToA1_(COL_ACT_TIMING, row), colToA1_(COL_CLIENTE, row), colToA1_(COL_RESPONSABLE, row)]).clearContent();
+    sh.getRangeList([
+      colToA1_(COL_ACT_TIMING, row),
+      colToA1_(COL_CLIENTE, row),
+      colToA1_(COL_RESPONSABLE, row)   // <— NUEVO
+    ]).clearContent();
     unlockClientCell_(sh, row);
+    unlockResponsableCell_(sh, row);    // <— NUEVO
   }
 
   // Solo recalcula validaciones cuando cambian ACT o OT
@@ -203,18 +211,18 @@ function onEdit(e) {
   const ot = String(otEdit || '').trim();
 
   if (esSeg && ot) {
-    const cliente = getClientFromLocalOTs_(ot);
-    const resp = getResponsableFromLocalOTs_(ot);   
-    const cCli = sh.getRange(row, COL_CLIENTE);
-    const cRes = sh.getRange(row, COL_RESPONSABLE);  
-    if (cliente) setIfChanged_(cCli, cliente); else cCli.clearContent();
-    if (resp) setIfChanged_(cRes, resp); else cRes.clearContent();  
-    lockClientCell_(sh, row);
-    lockResponsableCell_(sh, row);                 
-  } else {
-    unlockClientCell_(sh, row);
-    unlockResponsableCell_(sh, row);              
-  }
+  const cliente = getClientFromLocalOTs_(ot);
+  const resp    = getResponsableFromLocalOTs_(ot);   
+  const cCli = sh.getRange(row, COL_CLIENTE);
+  const cRes = sh.getRange(row, COL_RESPONSABLE);    
+  if (cliente) setIfChanged_(cCli, cliente); else cCli.clearContent();
+  if (resp)    setIfChanged_(cRes,  resp);    else cRes.clearContent();
+  lockClientCell_(sh, row);
+  lockResponsableCell_(sh, row);                  
+} else {
+  unlockClientCell_(sh, row);
+  unlockResponsableCell_(sh, row);                
+}
 
 }
 
@@ -580,29 +588,6 @@ function unlockClientCell_(sh, row) {
   removeClientProtectionIfExists_(sh, row);
 }
 
-function removeClientProtectionIfExists_(sh, row) {
-  const sheetId = sh.getSheetId();
-  let list = _CACHE._protBySheetId.get(sheetId);
-  if (!list) {
-    list = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE) || [];
-    _CACHE._protBySheetId.set(sheetId, list);
-  }
-  const rangeA1 = sh.getRange(row, COL_CLIENTE).getA1Notation();
-  const desc = makeClientLockDesc_(sh, row);
-  const kept = [];
-  for (const p of list) {
-    try {
-      const r = p.getRange();
-      if (r && (r.getA1Notation() === rangeA1 || p.getDescription() === desc)) {
-        p.remove();
-      } else {
-        kept.push(p);
-      }
-    } catch (_) { }
-  }
-  _CACHE._protBySheetId.set(sheetId, kept);
-}
-
 function lockResponsableCell_(sh, row) {
   removeResponsableProtectionIfExists_(sh, row);
   const prot = sh.getRange(row, COL_RESPONSABLE).protect();
@@ -642,6 +627,29 @@ function makeRespLockDesc_(sh, row) {
   return `__lock_responsable_${sh.getSheetId()}_${row}`;
 }
 
+
+function removeClientProtectionIfExists_(sh, row) {
+  const sheetId = sh.getSheetId();
+  let list = _CACHE._protBySheetId.get(sheetId);
+  if (!list) {
+    list = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE) || [];
+    _CACHE._protBySheetId.set(sheetId, list);
+  }
+  const rangeA1 = sh.getRange(row, COL_CLIENTE).getA1Notation();
+  const desc = makeClientLockDesc_(sh, row);
+  const kept = [];
+  for (const p of list) {
+    try {
+      const r = p.getRange();
+      if (r && (r.getA1Notation() === rangeA1 || p.getDescription() === desc)) {
+        p.remove();
+      } else {
+        kept.push(p);
+      }
+    } catch (_) { }
+  }
+  _CACHE._protBySheetId.set(sheetId, kept);
+}
 
 function _pushProtCache_(sh, prot) {
   const sheetId = sh.getSheetId();
@@ -825,14 +833,13 @@ function _getTimingsSS_() {
   return _CACHE.ssTimings;
 }
 
-/***** === NUEVO: Generar Reporte Final === *****/
-/***** === NUEVO: Generar Reporte Final (con Responsable) === *****/
+/***** === NUEVO: Generar Reporte Final + OTS NO TRABAJADAS === *****/
 function generateFinalReport_() {
   const ss = _getActiveSS_();
   const src = ss.getActiveSheet();
   const srcName = src.getName();
 
-  // Copia de la pestaña activa
+  // Copia de la pestaña
   const copy = src.copyTo(ss);
   const newName = `REPORTE FINAL-${srcName}`;
   try { copy.setName(newName); }
@@ -851,7 +858,7 @@ function generateFinalReport_() {
     return;
   }
 
-  // === Helpers locales ===
+  // === Helpers para DVs ===
   function getFirstDVRuleInColumn_(sheet, col, startRow) {
     const maxR = sheet.getMaxRows();
     const rng = sheet.getRange(startRow, col, Math.max(1, maxR - startRow + 1), 1);
@@ -879,16 +886,14 @@ function generateFinalReport_() {
     return null;
   }
   function toNormSet_(arr) { return new Set((arr || []).map(x => normalize_(x))); }
-  function toTxt_(x) { return (x === '' ? '' : "'" + String(x)); }
 
   const dataStart = CABECERA_FILA + 1;
 
-  // === 1) Listas permitidas detectadas desde validaciones
+  // === 1) Listas permitidas y validación para purgar filas ===
   const allowedTiempoList =
     inferAllowedList_(src, COL_TIEMPO_EST, dataStart) ||
-    inferAllowedList_(sh,  COL_TIEMPO_EST, dataStart);
+    inferAllowedList_(sh, COL_TIEMPO_EST, dataStart);
 
-  // Fallback de ACTIVIDAD GENERAL por si no detectamos DV
   const FALLBACK_ACT_LIST = [
     'SEGUIMIENTO DEL PROYECTO',
     'COMIDA',
@@ -903,27 +908,23 @@ function generateFinalReport_() {
   ];
   const allowedActList =
     inferAllowedList_(src, COL_ACTIVIDAD, dataStart) ||
-    inferAllowedList_(sh,  COL_ACTIVIDAD, dataStart) ||
+    inferAllowedList_(sh, COL_ACTIVIDAD, dataStart) ||
     FALLBACK_ACT_LIST.slice();
 
   const allowedActSetNorm = toNormSet_(allowedActList);
   const tiempoRegex = /^([0-1]?\d|2[0-3]):[0-5]\d$/; // hh:mm
 
-  // === 2) Eliminar filas que NO cumplan: (Nombre vacío) o (Tiempo/Actividad fuera de lista)
   const rowsToDelete = [];
   for (let r = dataStart; r <= lastRow; r++) {
     const vNombre = String(sh.getRange(r, COL_NOMBRE).getDisplayValue() || '').trim();
     if (!vNombre) { rowsToDelete.push(r); continue; }
 
     const vTiempo = String(sh.getRange(r, COL_TIEMPO_EST).getDisplayValue() || '').trim();
-    const vAct    = String(sh.getRange(r, COL_ACTIVIDAD).getDisplayValue() || '').trim();
+    const vAct = String(sh.getRange(r, COL_ACTIVIDAD).getDisplayValue() || '').trim();
 
     let okTiempo = true;
-    if (allowedTiempoList) {
-      okTiempo = (vTiempo === '') ? true : allowedTiempoList.includes(vTiempo);
-    } else {
-      okTiempo = (vTiempo === '') ? true : tiempoRegex.test(vTiempo);
-    }
+    if (allowedTiempoList) okTiempo = (vTiempo === '') ? true : allowedTiempoList.includes(vTiempo);
+    else okTiempo = (vTiempo === '') ? true : tiempoRegex.test(vTiempo);
 
     const actNorm = normalize_(vAct);
     const okActividad = (vAct === '') ? true : allowedActSetNorm.has(actNorm);
@@ -938,109 +939,223 @@ function generateFinalReport_() {
     return;
   }
 
-  // === 3) Quitar TODAS las validaciones
+  // === 2) Quitar TODAS las validaciones
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).setDataValidation(null);
 
-  // === 4) Normalizar a texto (usar displayValues para congelar formatos)
+  // === 3) Normalizar a texto y reglas de negocio
   const rngData = sh.getRange(dataStart, 1, lastRow2 - CABECERA_FILA, Math.max(lastCol, COL_CLIENTE, COL_RESPONSABLE));
   let vals = rngData.getDisplayValues().map(row => row.map(v => (v == null ? '' : String(v))));
 
-  // === 5) Reglas por actividad + fecha
   for (let i = 0; i < vals.length; i++) {
     const r = i + dataStart;
 
-    let vFecha     = vals[i][COL_FECHA-1];
-    let vNombre    = vals[i][COL_NOMBRE-1];
-    let vTiempo    = vals[i][COL_TIEMPO_EST-1];
-    let vOT        = vals[i][COL_OT-1];
-    let vActGral   = vals[i][COL_ACTIVIDAD-1];
-    let vActTiming = vals[i][COL_ACT_TIMING-1];
-    let vDesc      = vals[i][COL_DESC_ACT-1];
-    let vCliente   = vals[i][COL_CLIENTE-1];
-    let vResp      = vals[i][COL_RESPONSABLE-1]; // <<< RESPONSABLE
+    let vFecha = vals[i][COL_FECHA - 1];
+    let vNombre = vals[i][COL_NOMBRE - 1];
+    let vTiempo = vals[i][COL_TIEMPO_EST - 1];
+    let vOT = vals[i][COL_OT - 1];
+    let vActGral = vals[i][COL_ACTIVIDAD - 1];
+    let vActTiming = vals[i][COL_ACT_TIMING - 1];
+    let vDesc = vals[i][COL_DESC_ACT - 1];
+    let vCliente = vals[i][COL_CLIENTE - 1];
 
     const act = (vActGral || '').toString().trim().toUpperCase();
     const isCOMIDA = act === 'COMIDA';
-    const isVAC    = act === 'VACACIONES';
+    const isVAC = act === 'VACACIONES';
 
-    // Colorear fecha si es día hábil
     let fechaObj = toDateSafe_(vFecha);
     if (!vFecha || !String(vFecha).trim()) {
       vFecha = 'EL USUARIO NO LLENO LOS DATOS';
     } else if (fechaObj instanceof Date) {
-      const day = fechaObj.getDay(); // 0=Dom,6=Sáb
+      const day = fechaObj.getDay();
       if (day === 0 || day === 6) sh.getRange(r, COL_FECHA).setBackground(COLOR_NO_INICIA);
       else sh.getRange(r, COL_FECHA).setBackground(null);
     }
 
     if (isCOMIDA) {
       vTiempo = '1:00';
-      vOT = ''; vActTiming = ''; vDesc = ''; vCliente = ''; vResp = '';
+      vOT = ''; vActTiming = ''; vDesc = ''; vCliente = '';
     } else if (isVAC) {
       vTiempo = '10:00';
-      vOT = ''; vActTiming = ''; vDesc = ''; vCliente = ''; vResp = '';
+      vOT = ''; vActTiming = ''; vDesc = ''; vCliente = '';
     } else if (act === 'RRHH' || act === 'CAPACITACIÓN' || act === 'CAPACITACION') {
-      vOT = ''; vActTiming = ''; vCliente = ''; /* vResp: mantener si lo capturaron */
+      vOT = ''; vActTiming = ''; vCliente = '';
     } else if (act === 'JUNTA CLIENTE' || act === 'JUNTA CON CLIENTE') {
       vActTiming = '';
-      if (!vFecha || !String(vFecha).trim())  vFecha  = 'USUARIO NO LLENO LOS DATOS';
+      if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
       if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
-      if (!vDesc || !String(vDesc).trim())    vDesc   = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
       if (!vCliente || !String(vCliente).trim()) vCliente = 'USUARIO NO LLENO LOS DATOS';
-      if (!vOT || !String(vOT).trim())        vOT     = 'EL USUARIO NO LLENO LOS DATOS O EL CLIENTE NO TIENE OT';
-      // Responsable no es obligatorio aquí (sin cambio)
+      if (!vOT || !String(vOT).trim()) vOT = 'EL USUARIO NO LLENO LOS DATOS O EL CLIENTE NO TIENE OT';
     } else if (act === 'JUNTA INTERNA') {
       vActTiming = '';
-      if (!vFecha || !String(vFecha).trim())  vFecha  = 'USUARIO NO LLENO LOS DATOS';
+      if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
       if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
-      if (!vDesc || !String(vDesc).trim())    vDesc   = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
       if (!vCliente || !String(vCliente).trim()) vCliente = 'USUARIO NO LLENO LOS DATOS O NO ES JUNTA SOBRE UN CLIENTE/OT)';
-      // Responsable no es obligatorio aquí (sin cambio)
     } else if (act === 'OT INTERNA') {
       vActTiming = ''; vCliente = '';
-      if (!vFecha || !String(vFecha).trim())  vFecha  = 'USUARIO NO LLENO LOS DATOS';
+      if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
       if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
-      if (!vDesc || !String(vDesc).trim())    vDesc   = 'USUARIO NO LLENO LOS DATOS';
-      if (!vOT || !String(vOT).trim())        vOT     = 'USUARIO NO LLENO LOS DATOS';
-      if (!vResp || !String(vResp).trim())    vResp   = 'USUARIO NO LLENO LOS DATOS'; // <<< REGLA PEDIDA
+      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
+      if (!vOT || !String(vOT).trim()) vOT = 'USUARIO NO LLENO LOS DATOS';
     } else if (normalize_(act) === NORM_ACTIVIDAD_OBJETIVO) {
-      // Seguimiento del proyecto (mantiene todas las validaciones ya existentes)
-      if (!vFecha || !String(vFecha).trim())     vFecha     = 'USUARIO NO LLENO LOS DATOS';
-      if (!vTiempo || !String(vTiempo).trim())   vTiempo    = 'USUARIO NO LLENO LOS DATOS';
-      if (!vDesc || !String(vDesc).trim())       vDesc      = 'USUARIO NO LLENO LOS DATOS';
-      if (!vOT || !String(vOT).trim())           vOT        = 'USUARIO NO LLENO LOS DATOS';
+      if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
+      if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
+      if (!vOT || !String(vOT).trim()) vOT = 'USUARIO NO LLENO LOS DATOS';
       if (!vActTiming || !String(vActTiming).trim()) vActTiming = 'USUARIO NO LLENO LOS DATOS';
-      if (!vCliente || !String(vCliente).trim()) vCliente   = 'USUARIO NO LLENO LOS DATOS';
-      // Responsable no es obligatorio aquí; si quieres forzarlo, agrega validación similar.
+      if (!vCliente || !String(vCliente).trim()) vCliente = 'USUARIO NO LLENO LOS DATOS';
     }
 
-    // Validaciones generales
-    if (!vFecha || !String(vFecha).trim())   vFecha  = 'USUARIO NO LLENO LOS DATOS';
+    if (!vFecha || !String(vFecha).trim()) vFecha = 'USUARIO NO LLENO LOS DATOS';
     if (!vTiempo || !String(vTiempo).trim()) vTiempo = 'USUARIO NO LLENO LOS DATOS';
     if (!(isCOMIDA || isVAC)) {
-      if (!vDesc || !String(vDesc).trim())   vDesc   = 'USUARIO NO LLENO LOS DATOS';
+      if (!vDesc || !String(vDesc).trim()) vDesc = 'USUARIO NO LLENO LOS DATOS';
     } else {
       vDesc = '';
     }
 
-    // Reasignación a texto (con apóstrofe)
-    vals[i][COL_FECHA-1]      = toTxt_(vFecha);
-    vals[i][COL_NOMBRE-1]     = toTxt_(vNombre);
-    vals[i][COL_TIEMPO_EST-1] = toTxt_(vTiempo);
-    vals[i][COL_OT-1]         = toTxt_(vOT);
-    vals[i][COL_ACTIVIDAD-1]  = toTxt_(vActGral);
-    vals[i][COL_ACT_TIMING-1] = toTxt_(vActTiming);
-    vals[i][COL_DESC_ACT-1]   = toTxt_(vDesc);
-    vals[i][COL_CLIENTE-1]    = toTxt_(vCliente);
-    vals[i][COL_RESPONSABLE-1]= toTxt_(vResp); // <<< RESPONSABLE
+    const toTxt = x => (x === '' ? '' : "'" + String(x));
+    vals[i][COL_FECHA - 1] = toTxt(vFecha);
+    vals[i][COL_NOMBRE - 1] = toTxt(vNombre);
+    vals[i][COL_TIEMPO_EST - 1] = toTxt(vTiempo);
+    vals[i][COL_OT - 1] = toTxt(vOT);
+    vals[i][COL_ACTIVIDAD - 1] = toTxt(vActGral);
+    vals[i][COL_ACT_TIMING - 1] = toTxt(vActTiming);
+    vals[i][COL_DESC_ACT - 1] = toTxt(vDesc);
+    vals[i][COL_CLIENTE - 1] = toTxt(vCliente);
   }
 
-  // === 6) Escribir resultados
+  // Escribir de vuelta
   sh.getRange(dataStart, 1, vals.length, Math.max(vals[0].length, lastCol)).setValues(vals);
+
+  /***** 4) Construir tabla OTS NO TRABAJADAS *****/
+  // 4.1 OTs trabajadas (en filas con ACTIVIDAD GENERAL = SEGUIMIENTO DEL PROYECTO)
+  const used = sh.getRange(dataStart, 1, sh.getLastRow() - CABECERA_FILA, Math.max(COL_OT, COL_ACTIVIDAD, COL_RESPONSABLE))
+    .getDisplayValues();
+  const worked = new Set();
+  for (const row of used) {
+    const act = normalize_(row[COL_ACTIVIDAD - 1] || '');
+    const ot = String(row[COL_OT - 1] || '').trim();
+    if (act === NORM_ACTIVIDAD_OBJETIVO && ot) worked.add(ot);
+  }
+
+  // 4.2 Responsables:
+  // a) intentar desde __ots (si hay 3ª columna)
+  const respMap = new Map();
+  const shOts = ensureOTsSheet_();
+  const lastOtsRow = shOts.getLastRow();
+  const lastOtsCol = shOts.getLastColumn();
+  if (lastOtsRow >= 2 && lastOtsCol >= 3) {
+    const arr = shOts.getRange(2, 1, lastOtsRow - 1, 3).getValues();
+    for (const [ot, , resp] of arr) {
+      const k = String(ot || '').trim();
+      if (k && resp && !respMap.has(k)) respMap.set(k, String(resp).trim());
+    }
+  }
+  // b) fallback: desde la hoja final (primera coincidencia por OT en col RESPONSABLE)
+  if (respMap.size === 0) {
+    for (const row of used) {
+      const ot = String(row[COL_OT - 1] || '').trim();
+      const resp = String(row[COL_RESPONSABLE - 1] || '').trim();
+      if (ot && resp && !respMap.has(ot)) respMap.set(ot, resp);
+    }
+  }
+  function getResp_(ot) { return respMap.get(ot) || 'Sin registro'; }
+
+  // 4.3 Recolectar todas las tareas por OT desde __fechas_timing
+  _buildFechasMapIfNeeded_();
+  const shFechas = ensureFechasSheet_();
+  let fechasRows = [];
+  const lf = shFechas.getLastRow();
+  if (lf >= 2) fechasRows = shFechas.getRange(2, 1, lf - 1, 4).getValues(); // OT | Task | Start | Finish
+
+  const tasksByOT = new Map();
+  for (const [ot, task, s, f] of fechasRows) {
+    const k = String(ot || '').trim();
+    const t = String(task || '').trim();
+    if (!k || !t) continue;
+    const start = toDateSafe_(s);
+    const finish = toDateSafe_(f);
+    if (!start || !finish) continue;
+    if (!tasksByOT.has(k)) tasksByOT.set(k, []);
+    tasksByOT.get(k).push({ task: t, start, finish });
+  }
+
+  // 4.4 Construir filas de OTs no trabajadas
+  const hoy = stripTime_(new Date(), ss.getSpreadsheetTimeZone());
+  const otsAll = getAllOTsFromLocal_();
+  const outRows = [];
+  for (const ot of otsAll) {
+    if (worked.has(ot)) continue; // excluir OTs con actividad en el reporte
+    const tareas = tasksByOT.get(ot) || [];
+    const cliente = getClientFromLocalOTs_(ot);
+    const resp = getResp_(ot);
+    if (tareas.length === 0) {
+      // Sin tareas conocidas -> fila vacía con estatus "Sin fechas"
+      outRows.push([ot, '', 'SIN FECHAS', '', '', cliente, resp]);
+      continue;
+    }
+    for (const { task, start, finish } of tareas) {
+      let estatus = '';
+      if (hoy >= stripTime_(start, ss.getSpreadsheetTimeZone()) &&
+        hoy <= stripTime_(finish, ss.getSpreadsheetTimeZone())) estatus = 'EN CURSO';
+      else if (hoy > stripTime_(finish, ss.getSpreadsheetTimeZone())) estatus = 'VENCIDA';
+      else estatus = 'NO INICIA';
+      outRows.push([
+        ot,
+        task,
+        estatus,
+        formatDMY_(start, ss.getSpreadsheetTimeZone()),
+        formatDMY_(finish, ss.getSpreadsheetTimeZone()),
+        cliente,
+        resp
+      ]);
+    }
+  }
+
+  // 4.5 Pegar la tabla al lado derecho
+  if (outRows.length) {
+    const startCol = sh.getLastColumn() + 2;
+    const titleCell = sh.getRange(1, startCol);
+    titleCell.setValue('OTS NO TRABAJADAS').setFontWeight('bold');
+
+    const headers = ['OT', 'Task_Name', 'Estatus', 'Inicio', 'Fin', 'Cliente', 'Responsable'];
+    sh.getRange(2, startCol, 1, headers.length).setValues([headers]).setFontWeight('bold');
+
+    sh.getRange(3, startCol, outRows.length, headers.length).setValues(outRows);
+
+    // Formato fechas
+    sh.getRange(3, startCol + 3, outRows.length, 2).setNumberFormat('dd/MM/yyyy');
+
+    // Bandas por OT + color por Estatus
+    const bandColors = ['#f8f9fa', '#eef7ff'];
+    let currentOT = null;
+    let bandIdx = 0;
+    for (let i = 0; i < outRows.length; i++) {
+      const rowNo = 3 + i;
+      const ot = outRows[i][0];
+      if (ot !== currentOT) { currentOT = ot; bandIdx = 1 - bandIdx; }
+      const bg = bandColors[bandIdx];
+      // banda para toda la fila
+      sh.getRange(rowNo, startCol, 1, headers.length).setBackground(bg);
+      // estatus con color propio
+      const est = outRows[i][2];
+      let color = null;
+      if (est === 'EN CURSO') color = COLOR_EN_CURSO;
+      else if (est === 'VENCIDA') color = COLOR_VENCIDA;
+      else if (est === 'NO INICIA') color = COLOR_NO_INICIA;
+      if (color) sh.getRange(rowNo, startCol + 2).setBackground(color).setFontWeight('bold');
+    }
+
+    // Ancho de columnas amigable
+    for (let c = 0; c < headers.length; c++) {
+      sh.autoResizeColumn(startCol + c);
+    }
+  }
 
   SpreadsheetApp.getActive().toast(`Reporte final generado en la pestaña "${sh.getName()}".`, 'Reporte Final', 4);
 }
-
 
 
 
